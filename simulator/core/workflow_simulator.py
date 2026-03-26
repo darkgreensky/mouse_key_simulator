@@ -45,14 +45,23 @@ class WorkflowSimulator(BaseSimulator):
             vk_code = resolve_vk_code(step.target)
             if vk_code is None:
                 raise ValueError(f"Unsupported keyboard key: {step.target}")
-            self.keyboard.tap_key(vk_code, duration=step.hold_time)
+            self.keyboard.tap_key(vk_code, duration=step.duration)
         elif step.action_type == "mouse":
-            self.mouse.click(button=step.target, press_time=step.hold_time)
+            self.mouse.click(button=step.target, press_time=step.duration)
+        elif step.action_type == "delay":
+            time.sleep(step.duration)
+        elif step.action_type == "key_down":
+            vk_code = resolve_vk_code(step.target)
+            if vk_code is None:
+                raise ValueError(f"Unsupported keyboard key: {step.target}")
+            self.keyboard.press_key(vk_code)
+        elif step.action_type == "key_up":
+            vk_code = resolve_vk_code(step.target)
+            if vk_code is None:
+                raise ValueError(f"Unsupported keyboard key: {step.target}")
+            self.keyboard.release_key(vk_code)
         else:
             raise ValueError(f"Unsupported action type: {step.action_type}")
-
-        if step.post_delay > 0:
-            time.sleep(step.post_delay)
 
     def _should_stop(self):
         if self.template.stop_mode == "manual":

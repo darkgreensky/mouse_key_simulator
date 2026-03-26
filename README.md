@@ -6,7 +6,9 @@ python -m simulator.main
 
 Features:
 - Build a custom workflow with multiple keyboard or mouse steps
-- Control each step's hold time and delay
+- Control each step's hold time
+- Insert explicit delay steps anywhere in the workflow
+- Build combo actions with key down / key tap / key up
 - Export or import JSON templates for reusable automation flows
 - Toggle the workflow with the UI button or `F8`
 

@@ -23,8 +23,11 @@ class WorkflowTests(unittest.TestCase):
             stop_mode="duration",
             stop_value=30,
             steps=[
-                WorkflowStep("keyboard", "a", hold_time=0.1, post_delay=0.2),
-                WorkflowStep("mouse", "right", hold_time=0.05, post_delay=0.0),
+                WorkflowStep("key_down", "ctrl", duration=0.0),
+                WorkflowStep("keyboard", "a", duration=0.1),
+                WorkflowStep("key_up", "ctrl", duration=0.0),
+                WorkflowStep("delay", "", duration=0.2),
+                WorkflowStep("mouse", "right", duration=0.05),
             ],
         ).validate()
 
@@ -35,15 +38,24 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(restored.start_delay, 1.5)
         self.assertEqual(restored.stop_mode, "duration")
         self.assertEqual(restored.stop_value, 30)
-        self.assertEqual(len(restored.steps), 2)
-        self.assertEqual(restored.steps[0].target, "a")
-        self.assertEqual(restored.steps[1].target, "right")
+        self.assertEqual(len(restored.steps), 5)
+        self.assertEqual(restored.steps[0].action_type, "key_down")
+        self.assertEqual(restored.steps[1].target, "a")
+        self.assertEqual(restored.steps[3].action_type, "delay")
+        self.assertEqual(restored.steps[4].target, "right")
 
     def test_template_validation_rejects_invalid_step(self):
         with self.assertRaises(ValueError):
             WorkflowTemplate(
                 name="Broken",
-                steps=[WorkflowStep("keyboard", "not_a_key", hold_time=0.1, post_delay=0.1)],
+                steps=[WorkflowStep("keyboard", "not_a_key", duration=0.1)],
+            ).validate()
+
+    def test_template_validation_rejects_invalid_delay_step(self):
+        with self.assertRaises(ValueError):
+            WorkflowTemplate(
+                name="BrokenDelay",
+                steps=[WorkflowStep("delay", "", duration=0.0)],
             ).validate()
 
     def test_template_validation_rejects_invalid_stop_mode(self):
@@ -51,7 +63,7 @@ class WorkflowTests(unittest.TestCase):
             WorkflowTemplate(
                 name="BrokenStop",
                 stop_mode="unknown",
-                steps=[WorkflowStep("keyboard", "a", hold_time=0.1, post_delay=0.1)],
+                steps=[WorkflowStep("keyboard", "a", duration=0.1)],
             ).validate()
 
     def test_template_validation_requires_stop_value(self):
@@ -60,7 +72,7 @@ class WorkflowTests(unittest.TestCase):
                 name="BrokenStopValue",
                 stop_mode="cycles",
                 stop_value=0,
-                steps=[WorkflowStep("keyboard", "a", hold_time=0.1, post_delay=0.1)],
+                steps=[WorkflowStep("keyboard", "a", duration=0.1)],
             ).validate()
 
     def test_default_templates_are_valid(self):
@@ -77,7 +89,7 @@ class WorkflowTests(unittest.TestCase):
             cycle_interval=0.0,
             stop_mode="cycles",
             stop_value=2,
-            steps=[WorkflowStep("keyboard", "a", hold_time=0.0, post_delay=0.0)],
+            steps=[WorkflowStep("keyboard", "a", duration=0.0)],
         ).validate()
         simulator = WorkflowSimulator(template)
         simulator.keyboard.tap_key = lambda *args, **kwargs: None
@@ -85,6 +97,17 @@ class WorkflowTests(unittest.TestCase):
         time.sleep(0.05)
         self.assertFalse(simulator.is_running())
         self.assertEqual(simulator.completed_cycles, 2)
+
+    def test_legacy_step_shape_still_imports(self):
+        template = WorkflowTemplate.from_dict(
+            {
+                "name": "Legacy",
+                "steps": [
+                    {"action_type": "keyboard", "target": "a", "hold_time": 0.1, "post_delay": 0.2}
+                ],
+            }
+        )
+        self.assertEqual(template.steps[0].duration, 0.1)
 
 
 if __name__ == "__main__":

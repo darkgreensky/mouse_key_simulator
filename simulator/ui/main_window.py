@@ -5,6 +5,7 @@ from PyQt5.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QHBoxLayout,
@@ -13,7 +14,6 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QDoubleSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QTextEdit,
@@ -41,6 +41,14 @@ class MainWindow(QMainWindow):
         "multiply", "add", "subtract", "decimal", "divide",
         ";", "=", ",", "-", ".", "/", "`", "[", "\\", "]", "'",
     ]
+    ACTION_TYPE_LABELS = {
+        "keyboard": "按键点击",
+        "mouse": "鼠标点击",
+        "delay": "延时",
+        "key_down": "按下按键",
+        "key_up": "释放按键",
+    }
+    ACTION_TYPE_VALUES = {label: key for key, label in ACTION_TYPE_LABELS.items()}
     STOP_MODE_LABELS = {
         "manual": "手动停止",
         "duration": "按运行时长停止",
@@ -72,7 +80,7 @@ class MainWindow(QMainWindow):
         root_layout = QVBoxLayout()
         root_layout.setSpacing(10)
 
-        intro_label = QLabel("编辑自动化流程后，点击“开始”或按 F8 即可运行。")
+        intro_label = QLabel("编辑自动化流程后，点击“开始”或按 F8 即可运行。延时步骤可以插在任意位置，组合键可用“按下按键 + 按键点击 + 释放按键”实现。")
         intro_label.setWordWrap(True)
         root_layout.addWidget(intro_label)
 
@@ -81,7 +89,6 @@ class MainWindow(QMainWindow):
         self.preset_combo = QComboBox()
         self.preset_combo.addItems(self.templates.keys())
         preset_layout.addWidget(self.preset_combo)
-
         load_preset_button = QPushButton("加载预设")
         load_preset_button.clicked.connect(self.load_selected_preset)
         preset_layout.addWidget(load_preset_button)
@@ -91,7 +98,6 @@ class MainWindow(QMainWindow):
         self.name_input = QLineEdit()
         self.description_input = QTextEdit()
         self.description_input.setFixedHeight(60)
-
         self.repeat_checkbox = QCheckBox("循环执行流程")
         self.repeat_checkbox.setChecked(True)
 
@@ -126,42 +132,37 @@ class MainWindow(QMainWindow):
         form_layout.addRow("终止数值", self.stop_value_input)
         root_layout.addLayout(form_layout)
 
-        self.step_table = QTableWidget(0, 4)
-        self.step_table.setHorizontalHeaderLabels(["类型", "目标键", "按住时长(秒)", "步骤延迟(秒)"])
+        root_layout.addWidget(QLabel("流程步骤"))
+        self.step_table = QTableWidget(0, 3)
+        self.step_table.setHorizontalHeaderLabels(["类型", "目标", "时长(秒)"])
         self.step_table.horizontalHeader().setStretchLastSection(True)
         self.step_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.step_table.setSelectionMode(QAbstractItemView.SingleSelection)
-        root_layout.addWidget(QLabel("流程步骤"))
+        self.step_table.itemSelectionChanged.connect(self.load_selected_step_into_editor)
         root_layout.addWidget(self.step_table)
 
         editor_layout = QHBoxLayout()
         self.action_type_combo = QComboBox()
-        self.action_type_combo.addItems(["keyboard", "mouse"])
+        self.action_type_combo.addItems(self.ACTION_TYPE_LABELS.values())
+        self.action_type_combo.currentTextChanged.connect(self.refresh_target_options)
+        self.action_type_combo.currentTextChanged.connect(self.update_duration_hint)
 
         self.target_combo = QComboBox()
         self.target_combo.setEditable(True)
-        self.action_type_combo.currentTextChanged.connect(self.refresh_target_options)
 
-        self.hold_input = QDoubleSpinBox()
-        self.hold_input.setDecimals(4)
-        self.hold_input.setRange(0.0, 999.0)
-        self.hold_input.setSingleStep(0.01)
-        self.hold_input.setValue(0.05)
-
-        self.delay_input = QDoubleSpinBox()
-        self.delay_input.setDecimals(4)
-        self.delay_input.setRange(0.0, 999.0)
-        self.delay_input.setSingleStep(0.01)
-        self.delay_input.setValue(0.1)
+        self.duration_label = QLabel("时长")
+        self.duration_input = QDoubleSpinBox()
+        self.duration_input.setDecimals(4)
+        self.duration_input.setRange(0.0, 999.0)
+        self.duration_input.setSingleStep(0.01)
+        self.duration_input.setValue(0.05)
 
         editor_layout.addWidget(QLabel("类型"))
         editor_layout.addWidget(self.action_type_combo)
-        editor_layout.addWidget(QLabel("目标键"))
+        editor_layout.addWidget(QLabel("目标"))
         editor_layout.addWidget(self.target_combo)
-        editor_layout.addWidget(QLabel("按住"))
-        editor_layout.addWidget(self.hold_input)
-        editor_layout.addWidget(QLabel("延迟"))
-        editor_layout.addWidget(self.delay_input)
+        editor_layout.addWidget(self.duration_label)
+        editor_layout.addWidget(self.duration_input)
         root_layout.addLayout(editor_layout)
 
         step_button_layout = QHBoxLayout()
@@ -175,7 +176,6 @@ class MainWindow(QMainWindow):
         move_up_button.clicked.connect(lambda: self.move_selected_step(-1))
         move_down_button = QPushButton("下移")
         move_down_button.clicked.connect(lambda: self.move_selected_step(1))
-
         step_button_layout.addWidget(add_step_button)
         step_button_layout.addWidget(update_step_button)
         step_button_layout.addWidget(remove_step_button)
@@ -196,27 +196,54 @@ class MainWindow(QMainWindow):
         self.start_button.clicked.connect(self.toggle_simulation)
         root_layout.addWidget(self.start_button)
 
-        hint = QLabel("支持常见键盘按键、方向键、功能键、小键盘和鼠标左/右/中键，也可以手动输入自定义键名。")
+        hint = QLabel("组合键示例：先添加“按下按键 ctrl”，再添加“按键点击 c”，最后添加“释放按键 ctrl”。延时步骤的目标可以留空。")
         hint.setWordWrap(True)
         hint.setAlignment(Qt.AlignLeft)
         root_layout.addWidget(hint)
 
         self.refresh_target_options(self.action_type_combo.currentText())
+        self.update_duration_hint(self.action_type_combo.currentText())
         self.update_stop_value_state(self.stop_mode_combo.currentText())
-        self.step_table.itemSelectionChanged.connect(self.load_selected_step_into_editor)
 
         central_widget.setLayout(root_layout)
         self.setCentralWidget(central_widget)
 
-    def refresh_target_options(self, action_type):
+    def refresh_target_options(self, action_type_label):
+        action_type = self.ACTION_TYPE_VALUES[action_type_label]
         current_text = self.target_combo.currentText()
         self.target_combo.clear()
-        if action_type == "keyboard":
+        if action_type in {"keyboard", "key_down", "key_up"}:
             self.target_combo.addItems(self.KEY_PRESETS)
-        else:
+            self.target_combo.setEnabled(True)
+        elif action_type == "mouse":
             self.target_combo.addItems(["left", "right", "middle"])
-        if current_text:
-            self.target_combo.setEditText(current_text)
+            self.target_combo.setEnabled(True)
+        else:
+            self.target_combo.addItem("")
+            self.target_combo.setEnabled(False)
+        self.target_combo.setEditText(current_text if action_type != "delay" else "")
+
+    def update_duration_hint(self, action_type_label):
+        action_type = self.ACTION_TYPE_VALUES[action_type_label]
+        if action_type == "keyboard":
+            self.duration_label.setText("按住")
+            self.duration_input.setEnabled(True)
+            if self.duration_input.value() == 0:
+                self.duration_input.setValue(0.05)
+        elif action_type == "mouse":
+            self.duration_label.setText("点击时长")
+            self.duration_input.setEnabled(True)
+            if self.duration_input.value() == 0:
+                self.duration_input.setValue(0.02)
+        elif action_type == "delay":
+            self.duration_label.setText("延时")
+            self.duration_input.setEnabled(True)
+            if self.duration_input.value() <= 0:
+                self.duration_input.setValue(0.1)
+        else:
+            self.duration_label.setText("时长")
+            self.duration_input.setEnabled(False)
+            self.duration_input.setValue(0.0)
 
     def load_selected_preset(self):
         self.load_template(self.templates[self.preset_combo.currentText()])
@@ -237,12 +264,12 @@ class MainWindow(QMainWindow):
     def build_template_from_ui(self):
         steps = []
         for row in range(self.step_table.rowCount()):
+            action_label = self.step_table.item(row, 0).text()
             steps.append(
                 WorkflowStep(
-                    action_type=self.step_table.item(row, 0).text(),
+                    action_type=self.ACTION_TYPE_VALUES[action_label],
                     target=self.step_table.item(row, 1).text(),
-                    hold_time=float(self.step_table.item(row, 2).text()),
-                    post_delay=float(self.step_table.item(row, 3).text()),
+                    duration=float(self.step_table.item(row, 2).text()),
                 )
             )
         return WorkflowTemplate(
@@ -257,20 +284,17 @@ class MainWindow(QMainWindow):
         ).validate()
 
     def build_step_from_editor(self):
-        return WorkflowStep(
-            action_type=self.action_type_combo.currentText(),
-            target=self.target_combo.currentText(),
-            hold_time=self.hold_input.value(),
-            post_delay=self.delay_input.value(),
-        ).validate()
+        action_type = self.ACTION_TYPE_VALUES[self.action_type_combo.currentText()]
+        target = self.target_combo.currentText() if action_type != "delay" else ""
+        duration = self.duration_input.value()
+        return WorkflowStep(action_type=action_type, target=target, duration=duration).validate()
 
     def append_step_row(self, step):
         row = self.step_table.rowCount()
         self.step_table.insertRow(row)
-        self.step_table.setItem(row, 0, QTableWidgetItem(step.action_type))
+        self.step_table.setItem(row, 0, QTableWidgetItem(self.ACTION_TYPE_LABELS[step.action_type]))
         self.step_table.setItem(row, 1, QTableWidgetItem(step.target))
-        self.step_table.setItem(row, 2, QTableWidgetItem(f"{step.hold_time:.4f}"))
-        self.step_table.setItem(row, 3, QTableWidgetItem(f"{step.post_delay:.4f}"))
+        self.step_table.setItem(row, 2, QTableWidgetItem(f"{step.duration:.4f}"))
 
     def add_step(self):
         try:
@@ -290,10 +314,9 @@ class MainWindow(QMainWindow):
         except ValueError as exc:
             self.show_error(str(exc))
             return
-        self.step_table.item(row, 0).setText(step.action_type)
+        self.step_table.item(row, 0).setText(self.ACTION_TYPE_LABELS[step.action_type])
         self.step_table.item(row, 1).setText(step.target)
-        self.step_table.item(row, 2).setText(f"{step.hold_time:.4f}")
-        self.step_table.item(row, 3).setText(f"{step.post_delay:.4f}")
+        self.step_table.item(row, 2).setText(f"{step.duration:.4f}")
 
     def remove_selected_step(self):
         row = self.step_table.currentRow()
@@ -305,8 +328,8 @@ class MainWindow(QMainWindow):
         target_row = row + offset
         if row < 0 or target_row < 0 or target_row >= self.step_table.rowCount():
             return
-        values = [self.step_table.item(row, col).text() for col in range(4)]
-        target_values = [self.step_table.item(target_row, col).text() for col in range(4)]
+        values = [self.step_table.item(row, col).text() for col in range(3)]
+        target_values = [self.step_table.item(target_row, col).text() for col in range(3)]
         for col, value in enumerate(target_values):
             self.step_table.item(row, col).setText(value)
         for col, value in enumerate(values):
@@ -317,12 +340,12 @@ class MainWindow(QMainWindow):
         row = self.step_table.currentRow()
         if row < 0:
             return
-        action_type = self.step_table.item(row, 0).text()
-        self.action_type_combo.setCurrentText(action_type)
-        self.refresh_target_options(action_type)
+        action_label = self.step_table.item(row, 0).text()
+        self.action_type_combo.setCurrentText(action_label)
+        self.refresh_target_options(action_label)
+        self.update_duration_hint(action_label)
         self.target_combo.setEditText(self.step_table.item(row, 1).text())
-        self.hold_input.setValue(float(self.step_table.item(row, 2).text()))
-        self.delay_input.setValue(float(self.step_table.item(row, 3).text()))
+        self.duration_input.setValue(float(self.step_table.item(row, 2).text()))
 
     def update_stop_value_state(self, stop_mode_label):
         stop_mode = self.STOP_MODE_VALUES[stop_mode_label]

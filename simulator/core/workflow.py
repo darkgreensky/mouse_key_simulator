@@ -136,32 +136,32 @@ VK_CODE_MAP = {
 }
 
 MOUSE_BUTTONS = {"left", "right", "middle"}
-ACTION_TYPES = {"keyboard", "mouse"}
+ACTION_TYPES = {"keyboard", "mouse", "delay", "key_down", "key_up"}
 
 
 @dataclass
 class WorkflowStep:
     action_type: str
     target: str
-    hold_time: float = 0.05
-    post_delay: float = 0.1
+    duration: float = 0.05
 
     def normalized(self) -> "WorkflowStep":
         return WorkflowStep(
             action_type=self.action_type.strip().lower(),
             target=self.target.strip().lower(),
-            hold_time=max(0.0, float(self.hold_time)),
-            post_delay=max(0.0, float(self.post_delay)),
+            duration=max(0.0, float(self.duration)),
         )
 
     def validate(self) -> "WorkflowStep":
         step = self.normalized()
         if step.action_type not in ACTION_TYPES:
             raise ValueError(f"Unsupported action type: {self.action_type}")
-        if step.action_type == "keyboard" and resolve_vk_code(step.target) is None:
+        if step.action_type in {"keyboard", "key_down", "key_up"} and resolve_vk_code(step.target) is None:
             raise ValueError(f"Unsupported keyboard key: {self.target}")
         if step.action_type == "mouse" and step.target not in MOUSE_BUTTONS:
             raise ValueError(f"Unsupported mouse button: {self.target}")
+        if step.action_type == "delay" and step.duration <= 0:
+            raise ValueError("Delay duration must be greater than 0")
         return step
 
 
@@ -177,15 +177,29 @@ class WorkflowTemplate:
     steps: Optional[List[WorkflowStep]] = None
 
     def validate(self) -> "WorkflowTemplate":
-        normalized_steps = [step.validate() for step in (self.steps or [])]
+        normalized_steps = []
+        for step in self.steps or []:
+            if isinstance(step, WorkflowStep):
+                normalized_steps.append(step.validate())
+                continue
+            action_type = step.get("action_type", "")
+            target = step.get("target", "")
+            if "duration" in step:
+                duration = step["duration"]
+            else:
+                duration = step.get("hold_time", 0.05)
+            normalized_steps.append(WorkflowStep(action_type, target, duration).validate())
+
         if not normalized_steps:
             raise ValueError("Template must contain at least one workflow step")
+
         stop_mode = (self.stop_mode or "manual").strip().lower()
         if stop_mode not in {"manual", "duration", "cycles"}:
             raise ValueError(f"Unsupported stop mode: {self.stop_mode}")
         stop_value = max(0.0, float(self.stop_value))
         if stop_mode in {"duration", "cycles"} and stop_value <= 0:
             raise ValueError("Stop value must be greater than 0 for the selected stop mode")
+
         return WorkflowTemplate(
             name=(self.name or "Custom Template").strip(),
             description=(self.description or "").strip(),
@@ -215,7 +229,7 @@ class WorkflowTemplate:
 
     @classmethod
     def from_dict(cls, data: dict) -> "WorkflowTemplate":
-        steps = [WorkflowStep(**step) for step in data.get("steps", [])]
+        steps = data.get("steps", [])
         return cls(
             name=data.get("name", "Custom Template"),
             description=data.get("description", ""),
@@ -245,32 +259,32 @@ def default_templates() -> List[WorkflowTemplate]:
             description="持续点击鼠标左键，适合基础连点场景。",
             repeat=True,
             start_delay=0.0,
-            cycle_interval=0.0,
+            cycle_interval=0.05,
             stop_mode="manual",
             stop_value=0.0,
-            steps=[WorkflowStep("mouse", "left", hold_time=0.01, post_delay=0.0)],
+            steps=[WorkflowStep("mouse", "left", duration=0.01)],
         ).validate(),
         WorkflowTemplate(
             name="空格连按",
             description="持续按下空格键。",
             repeat=True,
             start_delay=0.0,
-            cycle_interval=0.0,
+            cycle_interval=0.01,
             stop_mode="manual",
             stop_value=0.0,
-            steps=[WorkflowStep("keyboard", "space", hold_time=0.005, post_delay=0.0)],
+            steps=[WorkflowStep("keyboard", "space", duration=0.005)],
         ).validate(),
         WorkflowTemplate(
             name="空格加左键",
             description="先按空格，再点击鼠标左键。",
             repeat=True,
             start_delay=0.0,
-            cycle_interval=0.0,
+            cycle_interval=0.0005,
             stop_mode="manual",
             stop_value=0.0,
             steps=[
-                WorkflowStep("keyboard", "space", hold_time=0.005, post_delay=0.0),
-                WorkflowStep("mouse", "left", hold_time=0.005, post_delay=0.0),
+                WorkflowStep("keyboard", "space", duration=0.0002),
+                WorkflowStep("mouse", "left", duration=0.0002),
             ],
         ).validate(),
         WorkflowTemplate(
@@ -282,10 +296,13 @@ def default_templates() -> List[WorkflowTemplate]:
             stop_mode="manual",
             stop_value=0.0,
             steps=[
-                WorkflowStep("keyboard", "w", hold_time=0.05, post_delay=0.05),
-                WorkflowStep("keyboard", "a", hold_time=0.05, post_delay=0.05),
-                WorkflowStep("keyboard", "s", hold_time=0.05, post_delay=0.05),
-                WorkflowStep("keyboard", "d", hold_time=0.05, post_delay=0.05),
+                WorkflowStep("keyboard", "w", duration=0.05),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "a", duration=0.05),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "s", duration=0.05),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "d", duration=0.05),
             ],
         ).validate(),
         WorkflowTemplate(
@@ -297,10 +314,13 @@ def default_templates() -> List[WorkflowTemplate]:
             stop_mode="manual",
             stop_value=0.0,
             steps=[
-                WorkflowStep("keyboard", "q", hold_time=0.03, post_delay=0.08),
-                WorkflowStep("keyboard", "w", hold_time=0.03, post_delay=0.08),
-                WorkflowStep("keyboard", "e", hold_time=0.03, post_delay=0.08),
-                WorkflowStep("keyboard", "r", hold_time=0.03, post_delay=0.08),
+                WorkflowStep("keyboard", "q", duration=0.03),
+                WorkflowStep("delay", "", duration=0.08),
+                WorkflowStep("keyboard", "w", duration=0.03),
+                WorkflowStep("delay", "", duration=0.08),
+                WorkflowStep("keyboard", "e", duration=0.03),
+                WorkflowStep("delay", "", duration=0.08),
+                WorkflowStep("keyboard", "r", duration=0.03),
             ],
         ).validate(),
         WorkflowTemplate(
@@ -311,7 +331,7 @@ def default_templates() -> List[WorkflowTemplate]:
             cycle_interval=0.12,
             stop_mode="manual",
             stop_value=0.0,
-            steps=[WorkflowStep("keyboard", "f", hold_time=0.03, post_delay=0.0)],
+            steps=[WorkflowStep("keyboard", "f", duration=0.03)],
         ).validate(),
         WorkflowTemplate(
             name="右键瞄准加左键射击",
@@ -322,8 +342,9 @@ def default_templates() -> List[WorkflowTemplate]:
             stop_mode="manual",
             stop_value=0.0,
             steps=[
-                WorkflowStep("mouse", "right", hold_time=0.02, post_delay=0.03),
-                WorkflowStep("mouse", "left", hold_time=0.02, post_delay=0.0),
+                WorkflowStep("mouse", "right", duration=0.02),
+                WorkflowStep("delay", "", duration=0.03),
+                WorkflowStep("mouse", "left", duration=0.02),
             ],
         ).validate(),
         WorkflowTemplate(
@@ -335,10 +356,13 @@ def default_templates() -> List[WorkflowTemplate]:
             stop_mode="manual",
             stop_value=0.0,
             steps=[
-                WorkflowStep("keyboard", "up", hold_time=0.04, post_delay=0.05),
-                WorkflowStep("keyboard", "right", hold_time=0.04, post_delay=0.05),
-                WorkflowStep("keyboard", "down", hold_time=0.04, post_delay=0.05),
-                WorkflowStep("keyboard", "left", hold_time=0.04, post_delay=0.05),
+                WorkflowStep("keyboard", "up", duration=0.04),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "right", duration=0.04),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "down", duration=0.04),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "left", duration=0.04),
             ],
         ).validate(),
         WorkflowTemplate(
@@ -350,11 +374,15 @@ def default_templates() -> List[WorkflowTemplate]:
             stop_mode="manual",
             stop_value=0.0,
             steps=[
-                WorkflowStep("keyboard", "1", hold_time=0.03, post_delay=0.05),
-                WorkflowStep("keyboard", "2", hold_time=0.03, post_delay=0.05),
-                WorkflowStep("keyboard", "3", hold_time=0.03, post_delay=0.05),
-                WorkflowStep("keyboard", "4", hold_time=0.03, post_delay=0.05),
-                WorkflowStep("keyboard", "5", hold_time=0.03, post_delay=0.05),
+                WorkflowStep("keyboard", "1", duration=0.03),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "2", duration=0.03),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "3", duration=0.03),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "4", duration=0.03),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "5", duration=0.03),
             ],
         ).validate(),
         WorkflowTemplate(
@@ -366,10 +394,27 @@ def default_templates() -> List[WorkflowTemplate]:
             stop_mode="manual",
             stop_value=0.0,
             steps=[
-                WorkflowStep("keyboard", "f1", hold_time=0.03, post_delay=0.05),
-                WorkflowStep("keyboard", "f2", hold_time=0.03, post_delay=0.05),
-                WorkflowStep("keyboard", "f3", hold_time=0.03, post_delay=0.05),
-                WorkflowStep("keyboard", "f4", hold_time=0.03, post_delay=0.05),
+                WorkflowStep("keyboard", "f1", duration=0.03),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "f2", duration=0.03),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "f3", duration=0.03),
+                WorkflowStep("delay", "", duration=0.05),
+                WorkflowStep("keyboard", "f4", duration=0.03),
+            ],
+        ).validate(),
+        WorkflowTemplate(
+            name="Ctrl+C 组合示例",
+            description="按住 Ctrl 的同时触发 C，演示组合按键写法。",
+            repeat=True,
+            start_delay=0.0,
+            cycle_interval=0.5,
+            stop_mode="manual",
+            stop_value=0.0,
+            steps=[
+                WorkflowStep("key_down", "ctrl", duration=0.0),
+                WorkflowStep("keyboard", "c", duration=0.03),
+                WorkflowStep("key_up", "ctrl", duration=0.0),
             ],
         ).validate(),
     ]
