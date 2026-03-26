@@ -1,0 +1,3 @@
+Application icon assets:
+- mouse_key_simulator.ico: Windows app / exe icon
+- mouse_key_simulator.png: preview image for the same icon
